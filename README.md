@@ -89,6 +89,32 @@ cp .env.example .env
 cdk deploy HermesNotificationChaineDancreStack
 ```
 
+## GitHub Actions デプロイ
+
+PR ではテストだけを実行し、`main` に merge された変更は `production` Environment の Secrets/Variables を使って CDK deploy します。AWS 認証は長期アクセスキーではなく、GitHub OIDC で取得する一時認証情報を使います。
+
+`production` Environment には次の Secrets を設定します。
+
+| Secret | 説明 |
+| --- | --- |
+| `AWS_ROLE_ARN` | GitHub Actions が AssumeRole する IAM Role ARN |
+| `NOTIFICATION_PHONE_NUMBER` | SNS SMS の通知先電話番号 |
+
+`production` Environment には次の Variables を設定します。
+
+| Variable | 説明 |
+| --- | --- |
+| `AWS_REGION` | CDK deploy 先リージョン |
+| `SEED_URLS` | クロール開始URL |
+| `ALLOWED_HOSTS` | クロール許可ホスト |
+| `NOTIFICATION_TIMEZONE` | 通知本文と保存時刻のタイムゾーン |
+| `SCHEDULE_MINUTES` | EventBridge 実行間隔 |
+| `TARGET_KEYWORDS` | 対象商品判定キーワード |
+| `TARGET_SIZES` | 対象サイズ |
+| `NOTIFY_ON_FIRST_AVAILABLE` | 初回 available を通知するか |
+| `PAGE_LIMIT` | 1回の最大取得ページ数 |
+| `FETCH_DELAY_MS` | 連続取得の待機時間 |
+
 ## クロールの仕組み
 
 1回の Lambda 実行では、`seedUrls` で指定した URL を起点に `allowedHosts` で許可された HTTPS URL だけを辿ります。商品ページらしい URL、または `targetKeywords` に一致する URL をキューに追加し、`pageLimit` に達するまで取得します。
