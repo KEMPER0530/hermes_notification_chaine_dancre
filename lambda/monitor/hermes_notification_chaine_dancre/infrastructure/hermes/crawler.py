@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from hermes_notification_chaine_dancre.application.config import MonitorConfig
@@ -46,7 +46,7 @@ class HermesProductCrawler:
                     user_agent=config.user_agent,
                     timeout_seconds=config.timeout_seconds,
                 )
-            except (HTTPError, URLError, TimeoutError, UnicodeError) as exc:
+            except (HTTPError, URLError, TimeoutError, UnicodeError, ValueError) as exc:
                 logger.warning("Failed to fetch %s: %s", normalized_url, exc)
                 continue
 
@@ -81,7 +81,7 @@ class HermesProductCrawler:
     def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
         """Hermes ページを取得し、最大読み込み量を制限して文字列化する。"""
         request = Request(
-            url,
+            encode_url_for_http_request(url),
             headers={
                 "User-Agent": user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
@@ -91,6 +91,16 @@ class HermesProductCrawler:
         with urlopen(request, timeout=timeout_seconds) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read(2_500_000).decode(charset, errors="replace")
+
+
+def encode_url_for_http_request(url: str) -> str:
+    """urllib が送信できるよう、URL の path/query だけを ASCII 安全にする。"""
+    parts = urlsplit(url)
+    # 既に percent-encoded 済みの URL を二重エンコードしないよう % は safe に残す。
+    encoded_path = quote(parts.path, safe="/%:@")
+    encoded_query = quote(parts.query, safe="=&%:+,;/?@")
+    # fragment は HTTP リクエストに送らないため、ここでも落としておく。
+    return urlunsplit((parts.scheme, parts.netloc, encoded_path, encoded_query, ""))
 
 
 def is_allowed_https_url(url: str, allowed_hosts: tuple[str, ...]) -> bool:

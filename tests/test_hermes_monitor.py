@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "lambda" / "monitor"))
@@ -23,6 +24,7 @@ from hermes_notification_chaine_dancre.infrastructure.hermes.parser import (
     parse_product_page,
 )
 from hermes_notification_chaine_dancre.infrastructure.hermes.crawler import (
+    encode_url_for_http_request,
     is_allowed_https_url,
 )
 
@@ -107,6 +109,40 @@ def test_extract_product_links_filters_assets_and_keeps_product_urls() -> None:
     assert links == [
         "https://www.hermes.com/jp/ja/product/bracelet-chaine-d-ancre-tgm-H222222/"
     ]
+
+
+def test_extract_product_links_keeps_only_target_product_urls() -> None:
+    """content/legal/category ページや対象外商品を巡回候補から外す。"""
+    japanese_target_slug = quote("ブレスレット-《シェーヌ・ダンクル》-gm-H333333", safe="")
+    html = f"""
+    <a href="/jp/ja/content/402251-page-plage-hermes/">content</a>
+    <a href="/jp/ja/legal/6597-apple-watch-hermes%E5%8F%96%E6%89%B1%E5%BA%97/">legal</a>
+    <a href="/jp/ja/category/jewelry/collections/chaine-d-ancre/?page=2">page 2</a>
+    <a href="/jp/ja/product/ブレスレット-《コリエ・ド・シアン》-pm-H115424Bv00LG/">other product</a>
+    <a href="/jp/ja/product/{japanese_target_slug}/">target</a>
+    """
+
+    links = extract_product_links(
+        html,
+        "https://www.hermes.com/jp/ja/category/jewelry/silver-jewelry/bracelets/",
+        target_keywords=["シェーヌダンクル", "chaine d'ancre"],
+    )
+
+    assert links == [f"https://www.hermes.com/jp/ja/product/{japanese_target_slug}/"]
+
+
+def test_encode_url_for_http_request_percent_encodes_japanese_url() -> None:
+    """urllib に渡す URL は日本語 path/query を percent-encode する。"""
+    encoded = encode_url_for_http_request(
+        "https://www.hermes.com/jp/ja/product/ブレスレット-《シェーヌ・ダンクル》-gm-H333333/"
+        "?q=入荷&page=1#ignored"
+    )
+
+    assert all(ord(character) < 128 for character in encoded)
+    assert "%E3%83%96" in encoded
+    assert "q=%E5%85%A5%E8%8D%B7" in encoded
+    assert "page=1" in encoded
+    assert "#ignored" not in encoded
 
 
 def test_allowed_hosts_rejects_non_hermes_and_non_https_urls() -> None:
