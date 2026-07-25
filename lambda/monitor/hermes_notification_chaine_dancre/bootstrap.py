@@ -1,3 +1,5 @@
+"""環境変数から本番用 use case と adapter を組み立てるモジュール。"""
+
 from __future__ import annotations
 
 import os
@@ -22,9 +24,11 @@ from hermes_notification_chaine_dancre.infrastructure.sns_restock_notifier impor
 
 
 def build_check_restocks_from_env() -> tuple[CheckRestocksUseCase, MonitorConfig]:
+    """Lambda 実行時の環境変数を読み、依存オブジェクトを配線する。"""
     table_name = required_env("DDB_TABLE_NAME")
     topic_arn = required_env("SNS_TOPIC_ARN")
 
+    # boto3 client/resource は infrastructure adapter に閉じ込める。
     dynamodb = boto3.resource("dynamodb")
     sns = boto3.client("sns")
 
@@ -41,6 +45,7 @@ def build_check_restocks_from_env() -> tuple[CheckRestocksUseCase, MonitorConfig
         user_agent=os.getenv("USER_AGENT", "hermes_notification_chaine_dancre/1.0"),
     )
 
+    # application 層は Protocol に依存し、具体実装はここでだけ注入する。
     use_case = CheckRestocksUseCase(
         crawler=HermesProductCrawler(),
         repository=DynamoDbProductStateRepository(dynamodb.Table(table_name)),
@@ -52,6 +57,7 @@ def build_check_restocks_from_env() -> tuple[CheckRestocksUseCase, MonitorConfig
 
 
 def required_env(name: str) -> str:
+    """必須環境変数の設定漏れを起動直後に検出する。"""
     value = os.getenv(name)
     if not value:
         raise RuntimeError(f"Missing required environment variable: {name}")

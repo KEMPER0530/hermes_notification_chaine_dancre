@@ -1,3 +1,5 @@
+"""Hermes ページの HTML から商品情報と購入可否を抽出する parser。"""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +15,7 @@ from hermes_notification_chaine_dancre.domain.models import ProductSnapshot
 
 
 DEFAULT_IN_STOCK_PHRASES = (
+    # JSON-LD が取れないページ向けに、購入可能を示す文言でも fallback 判定する。
     "add to cart",
     "add to bag",
     "add to shopping bag",
@@ -23,6 +26,7 @@ DEFAULT_IN_STOCK_PHRASES = (
 )
 
 DEFAULT_OUT_OF_STOCK_PHRASES = (
+    # Hermes 側の表記揺れに備え、英語と日本語の在庫なし文言を持つ。
     "out of stock",
     "sold out",
     "currently unavailable",
@@ -36,6 +40,8 @@ DEFAULT_OUT_OF_STOCK_PHRASES = (
 
 
 class LinkExtractor(HTMLParser):
+    """HTML 内の a タグから href だけを収集する軽量 parser。"""
+
     def __init__(self) -> None:
         super().__init__()
         self.links: list[str] = []
@@ -50,6 +56,8 @@ class LinkExtractor(HTMLParser):
 
 
 class MetadataExtractor(HTMLParser):
+    """title、h1、meta、canonical URL を HTML から抽出する。"""
+
     def __init__(self) -> None:
         super().__init__()
         self.title = ""
@@ -98,10 +106,12 @@ def parse_product_page(
     target_keywords: Sequence[str],
     target_sizes: Sequence[str],
 ) -> ProductSnapshot | None:
+    """HTML 1 ページを対象商品の snapshot へ変換する。対象外なら None を返す。"""
     metadata = extract_metadata(html)
     json_products = list(iter_jsonld_products(html))
     json_product = json_products[0] if json_products else {}
 
+    # 商品名は構造化データを最優先し、取れない場合は HTML メタ情報で補完する。
     name = first_non_empty(
         as_text(json_product.get("name")),
         metadata.meta.get("og:title", ""),
@@ -117,6 +127,7 @@ def parse_product_page(
         extract_sku_from_text(f"{name} {url}"),
     )
 
+    # キーワードとサイズの両方に一致したページだけを監視対象にする。
     visible = visible_text(html)
     combined_for_match = " ".join([name, sku or "", canonical_url, visible[:5000]])
     if target_keywords and not matches_any_keyword(combined_for_match, target_keywords):
@@ -128,6 +139,7 @@ def parse_product_page(
 
     schema_available = availability_from_jsonld(json_product)
     if schema_available is not None:
+        # schema.org の availability は最も信頼できるため、本文文言より優先する。
         available = schema_available
         availability_source = "json-ld"
     else:
@@ -149,6 +161,7 @@ def extract_product_links(
     base_url: str,
     target_keywords: Sequence[str],
 ) -> list[str]:
+    """ページ内リンクから、次に取得する価値がある商品候補 URL だけを返す。"""
     extractor = LinkExtractor()
     extractor.feed(html)
 
@@ -159,6 +172,7 @@ def extract_product_links(
             continue
         if looks_like_binary_asset(absolute):
             continue
+        # 商品 URL らしいもの、または対象キーワードを含むものだけ巡回候補にする。
         if looks_like_product_url(absolute) or matches_any_keyword(absolute, target_keywords):
             links.add(absolute)
 
@@ -166,12 +180,14 @@ def extract_product_links(
 
 
 def extract_metadata(html: str) -> MetadataExtractor:
+    """HTMLParser を実行し、メタ情報抽出結果を返す。"""
     parser = MetadataExtractor()
     parser.feed(html)
     return parser
 
 
 def iter_jsonld_products(html: str) -> list[dict[str, Any]]:
+    """application/ld+json から schema.org Product を取り出す。"""
     products: list[dict[str, Any]] = []
     pattern = re.compile(
         r"<script[^>]+type=[\"'][^\"']*ld\+json[^\"']*[\"'][^>]*>(.*?)</script>",
@@ -185,6 +201,7 @@ def iter_jsonld_products(html: str) -> list[dict[str, Any]]:
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
+            # サイト側の埋め込み JSON が壊れていても、HTML fallback で続行する。
             continue
         products.extend(find_schema_products(data))
 
@@ -192,6 +209,7 @@ def iter_jsonld_products(html: str) -> list[dict[str, Any]]:
 
 
 def find_schema_products(data: Any) -> list[dict[str, Any]]:
+    """JSON-LD の階層を再帰的にたどり Product node を集める。"""
     found: list[dict[str, Any]] = []
 
     if isinstance(data, list):
@@ -210,6 +228,7 @@ def find_schema_products(data: Any) -> list[dict[str, Any]]:
 
 
 def availability_from_jsonld(product: dict[str, Any]) -> bool | None:
+    """schema.org Offer availability を bool へ変換する。判定不能なら None。"""
     offers = product.get("offers")
     if not offers:
         return None
@@ -229,6 +248,7 @@ def availability_from_jsonld(product: dict[str, Any]) -> bool | None:
 
 
 def availability_from_text(text: str) -> tuple[bool, str]:
+    """本文テキストの購入/在庫なし文言から購入可否を fallback 判定する。"""
     compact = compact_text(text)
     has_in_stock = any(compact_text(phrase) in compact for phrase in DEFAULT_IN_STOCK_PHRASES)
     has_out_of_stock = any(compact_text(phrase) in compact for phrase in DEFAULT_OUT_OF_STOCK_PHRASES)
@@ -241,6 +261,7 @@ def availability_from_text(text: str) -> tuple[bool, str]:
 
 
 def visible_text(html: str) -> str:
+    """script/style を除いた人間向け本文テキストを作る。"""
     without_scripts = re.sub(
         r"<(script|style|noscript)[^>]*>.*?</\1>",
         " ",
@@ -252,6 +273,7 @@ def visible_text(html: str) -> str:
 
 
 def detect_size(target_sizes: Sequence[str], *values: str) -> str:
+    """商品名、SKU、URL、本文から GM/TGM などのサイズ表記を検出する。"""
     text = unicodedata.normalize("NFKC", " ".join(value for value in values if value)).upper()
     for size in sorted({item.upper() for item in target_sizes}, key=len, reverse=True):
         pattern = rf"(?<![A-Z0-9]){re.escape(size)}(?![A-Z0-9])"
@@ -261,6 +283,7 @@ def detect_size(target_sizes: Sequence[str], *values: str) -> str:
 
 
 def matches_any_keyword(value: str, keywords: Sequence[str]) -> bool:
+    """通常表記と区切り除去表記の両方でキーワード一致を判定する。"""
     if not keywords:
         return True
     normalized = normalize_for_match(value)
@@ -276,11 +299,13 @@ def matches_any_keyword(value: str, keywords: Sequence[str]) -> bool:
 
 
 def normalize_url(url: str) -> str:
+    """クロール済み判定を安定させるため fragment を落とす。"""
     without_fragment, _fragment = urldefrag(url)
     return without_fragment
 
 
 def stable_product_id(sku: str | None, url: str) -> str:
+    """SKU が取れれば SKU、なければ URL hash で安定 ID を作る。"""
     if sku:
         return f"sku#{sku}"
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
@@ -288,21 +313,25 @@ def stable_product_id(sku: str | None, url: str) -> str:
 
 
 def normalize_space(value: str) -> str:
+    """連続空白や改行を 1 つの空白へ正規化する。"""
     return re.sub(r"\s+", " ", value or "").strip()
 
 
 def normalize_for_match(value: str) -> str:
+    """表記揺れ比較用に Unicode と大小文字を正規化する。"""
     value = unicodedata.normalize("NFKC", unescape(value or "")).lower()
     value = value.replace("’", "'").replace("`", "'")
     return normalize_space(value)
 
 
 def compact_text(value: str) -> str:
+    """区切り文字を除去し、シェーヌ・ダンクル等の表記揺れを吸収する。"""
     value = normalize_for_match(value)
     return re.sub(r"[\s\-_./'’`・:;,\u3000]+", "", value)
 
 
 def first_non_empty(*values: str | None) -> str:
+    """複数候補から最初の非空文字列を返す。"""
     for value in values:
         if value and value.strip():
             return normalize_space(value)
@@ -310,6 +339,7 @@ def first_non_empty(*values: str | None) -> str:
 
 
 def first_non_empty_or_none(*values: str | None) -> str | None:
+    """複数候補から最初の非空文字列を返し、なければ None にする。"""
     for value in values:
         if value and value.strip():
             return normalize_space(value)
@@ -317,6 +347,7 @@ def first_non_empty_or_none(*values: str | None) -> str | None:
 
 
 def as_text(value: Any) -> str:
+    """JSON 由来の値を安全に文字列へ寄せる。"""
     if value is None:
         return ""
     if isinstance(value, str):
@@ -325,11 +356,13 @@ def as_text(value: Any) -> str:
 
 
 def extract_sku_from_text(value: str) -> str:
+    """Hermes の商品番号らしい H 始まりの識別子を抽出する。"""
     match = re.search(r"\bH[0-9A-Z]{6,}\b", value, flags=re.IGNORECASE)
     return match.group(0).upper() if match else ""
 
 
 def slug_name_from_url(url: str) -> str:
+    """メタ情報が取れない場合の最後の手段として URL slug から商品名候補を作る。"""
     path = urlparse(url).path.rstrip("/")
     slug = path.split("/")[-1] if path else ""
     slug = re.sub(r"-H[0-9A-Z]+$", "", slug, flags=re.IGNORECASE)
@@ -337,12 +370,14 @@ def slug_name_from_url(url: str) -> str:
 
 
 def looks_like_product_url(url: str) -> bool:
+    """Hermes 商品ページらしい URL かを緩く判定する。"""
     parsed = urlparse(url)
     path = parsed.path.lower()
     return "/product/" in path or "/products/" in path or "-h" in path
 
 
 def looks_like_binary_asset(url: str) -> bool:
+    """画像や JS/CSS など、HTML として取得しない asset URL を除外する。"""
     path = urlparse(url).path.lower()
     return path.endswith(
         (
@@ -361,4 +396,3 @@ def looks_like_binary_asset(url: str) -> bool:
             ".ico",
         )
     )
-

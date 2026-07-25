@@ -1,10 +1,13 @@
 name: CI
 
 on:
+  # PR 作成時に、Lambda/CDK の Python コードが壊れていないか確認する。
   pull_request:
+  # 手動実行も残し、main 反映後の確認や再実行に使えるようにする。
   workflow_dispatch:
 
 permissions:
+  # テストだけなので repository contents の読み取り権限に限定する。
   contents: read
 
 jobs:
@@ -28,7 +31,9 @@ jobs:
           python -m pip install -r requirements-dev.txt
 
       - name: Compile Python files
+        # pytest で通らない import 時エラーや構文エラーを早めに検出する。
         run: python -m compileall app.py infra lambda tests
 
       - name: Run tests
+        # domain/application/infrastructure の主要な回帰テストを実行する。
         run: python -m pytest -q

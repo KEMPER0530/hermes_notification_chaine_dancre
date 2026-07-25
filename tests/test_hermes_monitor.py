@@ -1,3 +1,5 @@
+"""HTML 解析と入荷通知ユースケースの回帰テスト。"""
+
 from __future__ import annotations
 
 import sys
@@ -7,6 +9,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1] / "lambda" / "monitor"))
 
+# Lambda 配下の package を、リポジトリルートから pytest 実行できるようにする。
 from hermes_notification_chaine_dancre.application.config import MonitorConfig
 from hermes_notification_chaine_dancre.application.use_cases import CheckRestocksUseCase
 from hermes_notification_chaine_dancre.domain.models import (
@@ -25,6 +28,7 @@ from hermes_notification_chaine_dancre.infrastructure.hermes.crawler import (
 
 
 def test_parse_jsonld_in_stock_product() -> None:
+    """JSON-LD の InStock を購入可能として扱えることを確認する。"""
     html = """
     <html>
       <head>
@@ -62,6 +66,7 @@ def test_parse_jsonld_in_stock_product() -> None:
 
 
 def test_parse_japanese_sold_out_fallback() -> None:
+    """構造化データがない場合に、日本語本文から在庫なしを判定する。"""
     html = """
     <html>
       <head><title>シェーヌ・ダンクル TGM | Hermès</title></head>
@@ -86,6 +91,7 @@ def test_parse_japanese_sold_out_fallback() -> None:
 
 
 def test_extract_product_links_filters_assets_and_keeps_product_urls() -> None:
+    """画像などの asset を除外し、商品 URL だけを巡回候補に残す。"""
     html = """
     <a href="/jp/ja/product/bracelet-chaine-d-ancre-tgm-H222222/">TGM</a>
     <a href="/content/image.jpg">image</a>
@@ -104,12 +110,14 @@ def test_extract_product_links_filters_assets_and_keeps_product_urls() -> None:
 
 
 def test_allowed_hosts_rejects_non_hermes_and_non_https_urls() -> None:
+    """クロール先が HTTPS の Hermes ドメインに制限されることを確認する。"""
     assert is_allowed_https_url("https://www.hermes.com/jp/ja/", ("hermes.com",)) is True
     assert is_allowed_https_url("http://www.hermes.com/jp/ja/", ("hermes.com",)) is False
     assert is_allowed_https_url("https://example.com/jp/ja/", ("hermes.com",)) is False
 
 
 def test_use_case_notifies_when_product_becomes_available() -> None:
+    """前回 unavailable、今回 available の遷移で通知されることを確認する。"""
     snapshot = ProductSnapshot(
         product_id="sku#H123456",
         name="Bracelet Chaîne d'ancre GM",
@@ -145,6 +153,7 @@ def test_use_case_notifies_when_product_becomes_available() -> None:
 
 
 def test_use_case_can_skip_initial_available_notification() -> None:
+    """初回から available の商品を通知しない設定が効くことを確認する。"""
     snapshot = ProductSnapshot(
         product_id="sku#H123456",
         name="Bracelet Chaîne d'ancre GM",
@@ -170,6 +179,7 @@ def test_use_case_can_skip_initial_available_notification() -> None:
 
 
 def make_config(notify_on_first_available: bool = True) -> MonitorConfig:
+    """テスト用の最小 MonitorConfig を作る。"""
     return MonitorConfig(
         seed_urls=("https://www.hermes.com/jp/ja/",),
         allowed_hosts=("hermes.com",),
@@ -190,6 +200,7 @@ def build_use_case(
     notifier: "CollectingNotifier",
     notify_on_first_available: bool = True,
 ) -> CheckRestocksUseCase:
+    """外部I/Oをすべて fake に差し替えた use case を作る。"""
     return CheckRestocksUseCase(
         crawler=StaticCrawler(snapshots),
         repository=repository,
@@ -200,6 +211,8 @@ def build_use_case(
 
 
 class StaticCrawler:
+    """固定 snapshot を返す crawler fake。"""
+
     def __init__(self, snapshots: list[ProductSnapshot]) -> None:
         self._snapshots = snapshots
 
@@ -208,6 +221,8 @@ class StaticCrawler:
 
 
 class InMemoryRepository:
+    """DynamoDB の代わりに dict で状態を保持する repository fake。"""
+
     def __init__(self, items: dict[str, ProductState]) -> None:
         self.items = dict(items)
 
@@ -219,6 +234,8 @@ class InMemoryRepository:
 
 
 class CollectingNotifier:
+    """SNS の代わりに通知イベントを list に保存する notifier fake。"""
+
     def __init__(self) -> None:
         self.events: list[RestockEvent] = []
 
@@ -227,5 +244,7 @@ class CollectingNotifier:
 
 
 class FixedClock:
+    """JST 変換を検証しやすい固定時刻を返す clock fake。"""
+
     def now(self) -> datetime:
         return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)

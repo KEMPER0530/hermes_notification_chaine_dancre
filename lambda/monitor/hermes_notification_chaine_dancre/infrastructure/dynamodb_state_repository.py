@@ -1,3 +1,5 @@
+"""DynamoDB を使った商品状態 repository adapter。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -6,10 +8,13 @@ from hermes_notification_chaine_dancre.domain.models import ProductState
 
 
 class DynamoDbProductStateRepository:
+    """ProductState を DynamoDB の Item へ変換して保存・取得する。"""
+
     def __init__(self, table: Any) -> None:
         self._table = table
 
     def get(self, product_id: str) -> ProductState | None:
+        # partition key は product_id と 1 対 1 なので GetItem だけで取得できる。
         response = self._table.get_item(Key={"id": product_id})
         item = response.get("Item")
         if not item:
@@ -17,6 +22,7 @@ class DynamoDbProductStateRepository:
         return self._to_state(item)
 
     def save(self, state: ProductState) -> None:
+        # 空文字は DynamoDB 上で扱いやすいよう sku のみ許容し、時刻系は存在時だけ保存する。
         item: dict[str, object] = {
             "id": state.product_id,
             "name": state.name,
@@ -34,6 +40,7 @@ class DynamoDbProductStateRepository:
         self._table.put_item(Item=item)
 
     def _to_state(self, item: dict[str, Any]) -> ProductState:
+        """DynamoDB の緩い型を domain model の型へ寄せる。"""
         return ProductState(
             product_id=str(item["id"]),
             name=str(item.get("name", "")),
@@ -50,4 +57,3 @@ class DynamoDbProductStateRepository:
             if item.get("last_notification_at")
             else None,
         )
-

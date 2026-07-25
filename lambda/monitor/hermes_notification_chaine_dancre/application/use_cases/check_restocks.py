@@ -1,3 +1,5 @@
+"""商品状態を比較し、入荷時だけ通知するユースケース。"""
+
 from __future__ import annotations
 
 import logging
@@ -22,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 class CheckRestocksUseCase:
+    """クロール、状態保存、通知を 1 回分の監視処理として調停する。"""
+
     def __init__(
         self,
         crawler: ProductCrawler,
@@ -30,6 +34,7 @@ class CheckRestocksUseCase:
         clock: Clock,
         policy: RestockPolicy,
     ) -> None:
+        # 具体的な AWS/HTTP 実装は受け取るだけにして、ユースケースを純粋に保つ。
         self._crawler = crawler
         self._repository = repository
         self._notifier = notifier
@@ -40,6 +45,7 @@ class CheckRestocksUseCase:
         logger.info("Checking %s Hermes seed URL(s)", len(config.seed_urls))
 
         snapshots = list(self._crawler.crawl(config))
+        # 通知本文と DynamoDB の時刻は設定されたタイムゾーンで統一する。
         checked_at = self._clock.now().astimezone(ZoneInfo(config.notification_timezone)).isoformat()
         notified_product_ids: list[str] = []
 
@@ -48,6 +54,7 @@ class CheckRestocksUseCase:
             should_notify = self._policy.should_notify(previous, snapshot)
 
             if should_notify:
+                # 通知 payload は domain のイベントとしてまとめ、SNS 固有の形式は adapter に任せる。
                 self._notifier.publish(
                     RestockEvent(
                         snapshot=snapshot,
@@ -57,6 +64,7 @@ class CheckRestocksUseCase:
                 )
                 notified_product_ids.append(snapshot.product_id)
 
+            # 通知有無にかかわらず、次回比較のために最新状態を保存する。
             state = ProductState.from_snapshot(
                 snapshot=snapshot,
                 checked_at=checked_at,

@@ -1,3 +1,5 @@
+"""Hermes 入荷通知システムの AWS リソースを定義する CDK スタック。"""
+
 import os
 from pathlib import Path
 
@@ -21,10 +23,13 @@ MONITOR_FUNCTION_NAME = f"{PROJECT_NAME}_monitor"
 
 
 class HermesNotificationChaineDancreStack(Stack):
+    """EventBridge、Lambda、DynamoDB、SNS をまとめて作成するスタック。"""
+
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
         Tags.of(self).add("Project", PROJECT_NAME)
 
+        # context と .env の両方から設定できるようにし、デプロイ時の差し替えを簡単にする。
         notification_emails = self._notification_values(
             plural_context_key="notificationEmails",
             plural_env_key="NOTIFICATION_EMAILS",
@@ -60,6 +65,7 @@ class HermesNotificationChaineDancreStack(Stack):
             notification_phone_numbers=notification_phone_numbers,
         )
 
+        # 前回の購入可否を保持するため、コストを抑えやすいオンデマンド課金にする。
         table = dynamodb.Table(
             self,
             "ProductStateTable",
@@ -79,6 +85,7 @@ class HermesNotificationChaineDancreStack(Stack):
             display_name=PROJECT_NAME,
         )
 
+        # SNS の宛先は Lambda に持たせず、Topic の subscription として CDK で管理する。
         for email in notification_emails:
             topic.add_subscription(subscriptions.EmailSubscription(email))
 
@@ -86,6 +93,7 @@ class HermesNotificationChaineDancreStack(Stack):
             topic.add_subscription(subscriptions.SmsSubscription(phone_number))
 
         lambda_path = Path(__file__).resolve().parents[1] / "lambda" / "monitor"
+        # log_retention helper は広い IAM を作るため、明示 LogGroup で最小権限化する。
         monitor_log_group = logs.LogGroup(
             self,
             "RestockMonitorLogGroup",
@@ -111,6 +119,7 @@ class HermesNotificationChaineDancreStack(Stack):
             )
         )
 
+        # 同時実行を 1 にして、重複クロールや短時間の連続アクセスを抑える。
         monitor_fn = lambda_.Function(
             self,
             "RestockMonitorFunction",
@@ -153,6 +162,7 @@ class HermesNotificationChaineDancreStack(Stack):
         )
         topic.grant_publish(monitor_fn)
 
+        # EventBridge rate は入力値検証で 5 分以上に制限している。
         rule = events.Rule(
             self,
             "RestockMonitorSchedule",
@@ -176,6 +186,7 @@ class HermesNotificationChaineDancreStack(Stack):
         )
 
     def _context_or_env(self, context_key: str, env_key: str, default: str) -> str:
+        """CDK context を優先し、未指定なら環境変数を使う。"""
         value = self.node.try_get_context(context_key)
         if value is None:
             value = os.getenv(env_key, default)
@@ -188,6 +199,7 @@ class HermesNotificationChaineDancreStack(Stack):
         singular_context_key: str,
         singular_env_key: str,
     ) -> tuple[str, ...]:
+        """単体指定とカンマ区切り指定をまとめて重複排除する。"""
         values = []
 
         plural_value = self._context_or_env(plural_context_key, plural_env_key, "")
@@ -199,6 +211,7 @@ class HermesNotificationChaineDancreStack(Stack):
         return tuple(dict.fromkeys(values))
 
     def _split_csv(self, value: str) -> list[str]:
+        """空要素を落としたカンマ区切りリストへ変換する。"""
         return [item.strip() for item in value.split(",") if item.strip()]
 
     def _validate_settings(
@@ -210,6 +223,7 @@ class HermesNotificationChaineDancreStack(Stack):
         notification_emails: tuple[str, ...],
         notification_phone_numbers: tuple[str, ...],
     ) -> None:
+        """過剰クロールや通知先未設定をデプロイ前に検出する。"""
         if schedule_minutes < 5:
             raise ValueError("scheduleMinutes must be 5 or greater to avoid excessive crawling.")
         if page_limit < 1 or page_limit > 50:

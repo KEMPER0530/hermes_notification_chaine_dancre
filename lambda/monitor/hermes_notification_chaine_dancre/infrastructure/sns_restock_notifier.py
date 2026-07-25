@@ -1,3 +1,5 @@
+"""SNS Topic へ入荷通知を publish する adapter。"""
+
 from __future__ import annotations
 
 from typing import Any
@@ -6,6 +8,8 @@ from hermes_notification_chaine_dancre.domain.models import RestockEvent
 
 
 class SnsRestockNotifier:
+    """RestockEvent を SMS/Email 向けの日本語本文へ変換して送信する。"""
+
     def __init__(self, sns_client: Any, topic_arn: str) -> None:
         self._sns_client = sns_client
         self._topic_arn = topic_arn
@@ -15,6 +19,7 @@ class SnsRestockNotifier:
         previous_label = (
             "未記録" if event.previous_available is None else str(event.previous_available)
         )
+        # SNS SMS でも読めるよう、本文は短い項目の羅列にする。
         subject = f"Hermes入荷通知: {snapshot.name[:70]}"
         message = "\n".join(
             [

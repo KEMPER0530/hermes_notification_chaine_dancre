@@ -1,3 +1,5 @@
+"""Hermes 公式サイトを控えめに巡回する crawler adapter。"""
+
 from __future__ import annotations
 
 import logging
@@ -19,7 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 class HermesProductCrawler:
+    """seed URL から対象商品ページを辿り、現在の商品状態を返す。"""
+
     def crawl(self, config: MonitorConfig) -> list[ProductSnapshot]:
+        # seed URL は HTTPS かつ許可ホストだけを開始点にする。
         queue = [
             url
             for url in dict.fromkeys(config.seed_urls)
@@ -45,6 +50,7 @@ class HermesProductCrawler:
                 logger.warning("Failed to fetch %s: %s", normalized_url, exc)
                 continue
 
+            # 商品ページとして解析できたものだけ snapshot として採用する。
             snapshot = parse_product_page(
                 normalized_url,
                 html,
@@ -54,6 +60,7 @@ class HermesProductCrawler:
             if snapshot:
                 snapshots[snapshot.product_id] = snapshot
 
+            # ページ内リンクは商品候補だけを次の巡回対象にする。
             for link in extract_product_links(
                 html,
                 normalized_url,
@@ -65,12 +72,14 @@ class HermesProductCrawler:
                 if link not in visited and link not in queue:
                     queue.append(link)
 
+            # 短時間の連続アクセスを避けるため、次の取得前に待機する。
             if queue and config.fetch_delay_ms > 0:
                 time.sleep(config.fetch_delay_ms / 1000)
 
         return list(snapshots.values())
 
     def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+        """Hermes ページを取得し、最大読み込み量を制限して文字列化する。"""
         request = Request(
             url,
             headers={
@@ -85,11 +94,13 @@ class HermesProductCrawler:
 
 
 def is_allowed_https_url(url: str, allowed_hosts: tuple[str, ...]) -> bool:
+    """クロール開始 URL が HTTPS かつ許可ホストかを判定する。"""
     parsed = urlparse(url)
     return parsed.scheme == "https" and is_allowed_host(parsed.netloc, allowed_hosts)
 
 
 def is_allowed_host(netloc: str, allowed_hosts: tuple[str, ...]) -> bool:
+    """サブドメインを許容しつつ、外部ホストへの逸脱を防ぐ。"""
     host = netloc.split("@")[-1].split(":")[0].strip(".").lower()
     normalized_allowed_hosts = tuple(item.strip(".").lower() for item in allowed_hosts if item)
     return any(host == allowed or host.endswith(f".{allowed}") for allowed in normalized_allowed_hosts)
