@@ -1,3 +1,5 @@
+"""AWS へ接続せず Hermes ページ解析だけを確認するローカル CLI。"""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from hermes_notification_chaine_dancre.infrastructure.hermes import HermesProduc
 
 
 def main() -> None:
+    # Lambda と同じ crawler を使い、DynamoDB/SNS なしで解析結果を確認する。
     parser = argparse.ArgumentParser()
     parser.add_argument("--seed-url", action="append", required=True)
     parser.add_argument(
@@ -26,6 +29,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # CLI 引数を application 層の設定型へ寄せて、実行経路の差を最小にする。
     config = MonitorConfig(
         seed_urls=tuple(args.seed_url),
         allowed_hosts=split_csv(args.allowed_hosts),

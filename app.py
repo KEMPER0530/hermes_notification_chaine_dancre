@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""CDK アプリケーションのエントリーポイント。"""
+
 import os
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from infra.hermes_restock_stack import HermesNotificationChaineDancreStack
 
 
 def load_dotenv(path: Path) -> None:
+    """ローカル開発用の .env を CDK context より前に環境変数へ反映する。"""
     if not path.exists():
         return
 
@@ -23,6 +26,7 @@ def load_dotenv(path: Path) -> None:
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
 app = cdk.App()
+# AWS CLI の既定リージョンに引きずられないよう、東京リージョンを既定にする。
 deploy_region = str(app.node.try_get_context("region") or os.getenv("CDK_DEPLOY_REGION", "ap-northeast-1"))
 
 HermesNotificationChaineDancreStack(
