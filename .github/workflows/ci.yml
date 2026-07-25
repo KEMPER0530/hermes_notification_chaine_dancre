@@ -3,6 +3,10 @@ name: CI
 on:
   # PR 作成時に、Lambda/CDK の Python コードが壊れていないか確認する。
   pull_request:
+  # main に入った変更だけを本番デプロイ候補にする。
+  push:
+    branches:
+      - main
   # 手動実行も残し、main 反映後の確認や再実行に使えるようにする。
   workflow_dispatch:
 
@@ -37,3 +41,67 @@ jobs:
       - name: Run tests
         # domain/application/infrastructure の主要な回帰テストを実行する。
         run: python -m pytest -q
+
+  deploy:
+    name: CDK deploy
+    needs: test
+    runs-on: ubuntu-latest
+    # Environment を使うことで、OIDC の sub claim と本番用 Secrets/Variables を固定する。
+    environment: production
+    if: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    permissions:
+      # GitHub OIDC で AWS の一時認証情報を取得するために必要。
+      id-token: write
+      contents: read
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
+      SEED_URLS: ${{ vars.SEED_URLS }}
+      ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
+      NOTIFICATION_TIMEZONE: ${{ vars.NOTIFICATION_TIMEZONE }}
+      SCHEDULE_MINUTES: ${{ vars.SCHEDULE_MINUTES }}
+      TARGET_KEYWORDS: ${{ vars.TARGET_KEYWORDS }}
+      TARGET_SIZES: ${{ vars.TARGET_SIZES }}
+      NOTIFY_ON_FIRST_AVAILABLE: ${{ vars.NOTIFY_ON_FIRST_AVAILABLE }}
+      PAGE_LIMIT: ${{ vars.PAGE_LIMIT }}
+      FETCH_DELAY_MS: ${{ vars.FETCH_DELAY_MS }}
+      NOTIFICATION_PHONE_NUMBER: ${{ secrets.NOTIFICATION_PHONE_NUMBER }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install CDK app dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+          allowed-account-ids: "870574718611"
+          role-session-name: hermes-notification-cdk-deploy
+
+      - name: Synthesize CDK
+        # deploy 前に template 生成を明示して、環境変数不足を早めに検出する。
+        run: npx -y aws-cdk@latest synth HermesNotificationChaineDancreStack
+
+      - name: Deploy CDK stack
+        # CDK 管理下のLambda/IAM/EventBridge/SNS/DynamoDBを差分更新する。
+        run: |
+          npx -y aws-cdk@latest deploy HermesNotificationChaineDancreStack \
+            --require-approval never \
+            --outputs-file cdk-outputs.json
