@@ -9,7 +9,7 @@ import unicodedata
 from html import unescape
 from html.parser import HTMLParser
 from typing import Any, Sequence
-from urllib.parse import urldefrag, urljoin, urlparse
+from urllib.parse import unquote, urldefrag, urljoin, urlparse
 
 from hermes_notification_chaine_dancre.domain.models import ProductSnapshot
 
@@ -172,9 +172,12 @@ def extract_product_links(
             continue
         if looks_like_binary_asset(absolute):
             continue
-        # 商品 URL らしいもの、または対象キーワードを含むものだけ巡回候補にする。
-        if looks_like_product_url(absolute) or matches_any_keyword(absolute, target_keywords):
-            links.add(absolute)
+        if not looks_like_product_url(absolute):
+            continue
+        # seed URL 側でカテゴリを指定し、そこから対象商品URLだけへ進む。
+        if target_keywords and not matches_any_keyword(absolute, target_keywords):
+            continue
+        links.add(absolute)
 
     return sorted(links)
 
@@ -319,7 +322,7 @@ def normalize_space(value: str) -> str:
 
 def normalize_for_match(value: str) -> str:
     """表記揺れ比較用に Unicode と大小文字を正規化する。"""
-    value = unicodedata.normalize("NFKC", unescape(value or "")).lower()
+    value = unicodedata.normalize("NFKC", unquote(unescape(value or ""))).lower()
     value = value.replace("’", "'").replace("`", "'")
     return normalize_space(value)
 
@@ -366,14 +369,18 @@ def slug_name_from_url(url: str) -> str:
     path = urlparse(url).path.rstrip("/")
     slug = path.split("/")[-1] if path else ""
     slug = re.sub(r"-H[0-9A-Z]+$", "", slug, flags=re.IGNORECASE)
-    return normalize_space(slug.replace("-", " "))
+    return normalize_space(unquote(slug).replace("-", " "))
 
 
 def looks_like_product_url(url: str) -> bool:
     """Hermes 商品ページらしい URL かを緩く判定する。"""
     parsed = urlparse(url)
     path = parsed.path.lower()
-    return "/product/" in path or "/products/" in path or "-h" in path
+    return (
+        "/product/" in path
+        or "/products/" in path
+        or bool(re.search(r"(?:^|[-/])h[0-9a-z]{6,}(?:/|$)", path))
+    )
 
 
 def looks_like_binary_asset(url: str) -> bool:
