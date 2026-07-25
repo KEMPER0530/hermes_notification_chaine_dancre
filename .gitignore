@@ -1,0 +1,19 @@
+.venv/
+.venv312/
+.pip-audit-cache/
+.npm-cache/
+.home/
+.cdk-home/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyc
+.DS_Store
+
+# AWS CDK
+cdk.out/
+cdk-outputs.json
+
+# Local env
+.env
