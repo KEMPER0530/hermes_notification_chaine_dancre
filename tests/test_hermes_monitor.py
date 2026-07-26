@@ -27,6 +27,10 @@ from hermes_notification_chaine_dancre.infrastructure.hermes.crawler import (
     encode_url_for_http_request,
     is_allowed_https_url,
 )
+from hermes_notification_chaine_dancre.infrastructure.sns_restock_notifier import (
+    SnsRestockNotifier,
+    to_linkable_url,
+)
 
 
 def test_parse_jsonld_in_stock_product() -> None:
@@ -143,6 +147,40 @@ def test_encode_url_for_http_request_percent_encodes_japanese_url() -> None:
     assert "q=%E5%85%A5%E8%8D%B7" in encoded
     assert "page=1" in encoded
     assert "#ignored" not in encoded
+
+
+def test_sns_notification_percent_encodes_japanese_product_url() -> None:
+    """通知本文のURLは、SMSで途中切れしないようASCIIのURLにする。"""
+    raw_url = (
+        "https://www.hermes.com/jp/ja/product/"
+        "ブレスレット-《シェーヌ・ダンクル》-gm-H101672Bv00011/"
+    )
+    sns_client = CapturingSnsClient()
+    notifier = SnsRestockNotifier(sns_client, "arn:aws:sns:ap-northeast-1:123456789012:test")
+
+    notifier.publish(
+        RestockEvent(
+            snapshot=ProductSnapshot(
+                product_id="sku#H101672B00011",
+                name="ブレスレット 《シェーヌ・ダンクル》 GM",
+                size="GM",
+                url=raw_url,
+                sku="H101672B 00011",
+                available=True,
+                availability_source="json-ld",
+            ),
+            previous_available=None,
+            checked_at="2026-07-26T10:11:46+09:00",
+        )
+    )
+
+    expected_url = to_linkable_url(raw_url)
+    message = sns_client.published_messages[0]["Message"]
+
+    assert expected_url in message
+    assert "URL: https://www.hermes.com/jp/ja/product/%E3%83%96" in message
+    assert "《シェーヌ・ダンクル》" not in message.split("URL: ", maxsplit=1)[1].splitlines()[0]
+    assert all(ord(character) < 128 for character in expected_url)
 
 
 def test_allowed_hosts_rejects_non_hermes_and_non_https_urls() -> None:
@@ -277,6 +315,16 @@ class CollectingNotifier:
 
     def publish(self, event: RestockEvent) -> None:
         self.events.append(event)
+
+
+class CapturingSnsClient:
+    """SNS publish の入力値を保持する client fake。"""
+
+    def __init__(self) -> None:
+        self.published_messages: list[dict[str, str]] = []
+
+    def publish(self, **kwargs: str) -> None:
+        self.published_messages.append(kwargs)
 
 
 class FixedClock:
