@@ -13,7 +13,9 @@ from hermes_notification_chaine_dancre.domain.models import ProductSnapshot
 from hermes_notification_chaine_dancre.infrastructure.hermes.parser import (
     extract_product_links,
     normalize_url,
+    parse_embedded_product_list,
     parse_product_page,
+    parse_product_seed_url,
 )
 
 
@@ -48,6 +50,13 @@ class HermesProductCrawler:
                 )
             except (HTTPError, URLError, TimeoutError, UnicodeError, ValueError) as exc:
                 logger.warning("Failed to fetch %s: %s", normalized_url, exc)
+                fallback_snapshot = parse_product_seed_url(
+                    normalized_url,
+                    target_keywords=config.target_keywords,
+                    target_sizes=config.target_sizes,
+                )
+                if fallback_snapshot:
+                    snapshots.setdefault(fallback_snapshot.product_id, fallback_snapshot)
                 continue
 
             # 商品ページとして解析できたものだけ snapshot として採用する。
@@ -59,6 +68,15 @@ class HermesProductCrawler:
             )
             if snapshot:
                 snapshots[snapshot.product_id] = snapshot
+
+            # カテゴリページは商品ページURLを直接辿れない場合があるため、SSR済み商品JSONも読む。
+            for embedded_snapshot in parse_embedded_product_list(
+                normalized_url,
+                html,
+                target_keywords=config.target_keywords,
+                target_sizes=config.target_sizes,
+            ):
+                snapshots.setdefault(embedded_snapshot.product_id, embedded_snapshot)
 
             # ページ内リンクは商品候補だけを次の巡回対象にする。
             for link in extract_product_links(

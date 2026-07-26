@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import quote
 
 
@@ -21,9 +22,11 @@ from hermes_notification_chaine_dancre.domain.models import (
 from hermes_notification_chaine_dancre.domain.services import RestockPolicy
 from hermes_notification_chaine_dancre.infrastructure.hermes.parser import (
     extract_product_links,
+    parse_embedded_product_list,
     parse_product_page,
 )
 from hermes_notification_chaine_dancre.infrastructure.hermes.crawler import (
+    HermesProductCrawler,
     encode_url_for_http_request,
     is_allowed_https_url,
 )
@@ -183,6 +186,110 @@ def test_sns_notification_percent_encodes_japanese_product_url() -> None:
     assert all(ord(character) < 128 for character in expected_url)
 
 
+def test_parse_embedded_product_list_detects_available_chaine_dancre_gm() -> None:
+    """カテゴリHTMLのhermes-stateから対象GM商品を検知できることを確認する。"""
+    html = """
+    <script id="hermes-state" type="application/json">
+      {
+        "788659288": {
+          "b": {
+            "products": {
+              "items": [
+                {
+                  "sku": "H101672B 00011",
+                  "title": "ブレスレット 《シェーヌ・ダンクル》 GM",
+                  "url": "/product/ブレスレット-《シェーヌ・ダンクル》-gm-H101672Bv00011/",
+                  "slug": "ブレスレット-《シェーヌ・ダンクル》-gm",
+                  "stock": {
+                    "ecom": true,
+                    "hasVariantInEcomStock": false,
+                    "displayOnly": false
+                  }
+                },
+                {
+                  "sku": "H115424B 00LG",
+                  "title": "ブレスレット 《コリエ・ド・シアン》 PM",
+                  "url": "/product/ブレスレット-《コリエ・ド・シアン》-pm-H115424Bv00LG/",
+                  "stock": {"ecom": true, "displayOnly": false}
+                }
+              ]
+            }
+          }
+        }
+      }
+    </script>
+    """
+
+    snapshots = parse_embedded_product_list(
+        "https://www.hermes.com/jp/ja/category/jewelry/silver-jewelry/bracelets/",
+        html,
+        target_keywords=["シェーヌダンクル", "chaine d'ancre"],
+        target_sizes=["GM", "TGM"],
+    )
+
+    assert len(snapshots) == 1
+    assert snapshots[0].name == "ブレスレット 《シェーヌ・ダンクル》 GM"
+    assert snapshots[0].sku == "H101672B 00011"
+    assert snapshots[0].size == "GM"
+    assert snapshots[0].available is True
+    assert snapshots[0].availability_source == "hermes-state"
+    assert snapshots[0].url == (
+        "https://www.hermes.com/jp/ja/product/"
+        "ブレスレット-《シェーヌ・ダンクル》-gm-H101672Bv00011/"
+    )
+
+
+def test_crawler_uses_embedded_product_list_from_category_page() -> None:
+    """商品ページが403でもカテゴリHTMLだけで対象商品を返せることを確認する。"""
+    html = """
+    <script id="hermes-state" type="application/json">
+      {
+        "788659288": {
+          "b": {
+            "products": {
+              "items": [
+                {
+                  "sku": "H101672B 00011",
+                  "title": "ブレスレット 《シェーヌ・ダンクル》 GM",
+                  "url": "/product/ブレスレット-《シェーヌ・ダンクル》-gm-H101672Bv00011/",
+                  "stock": {"ecom": true, "displayOnly": false}
+                }
+              ]
+            }
+          }
+        }
+      }
+    </script>
+    """
+    crawler = StaticHtmlHermesCrawler({make_config().seed_urls[0]: html})
+
+    snapshots = crawler.crawl(make_config())
+
+    assert len(snapshots) == 1
+    assert snapshots[0].product_id == "sku#H101672B 00011"
+    assert snapshots[0].availability_source == "hermes-state"
+
+
+def test_crawler_records_unreachable_direct_seed_as_unavailable_snapshot() -> None:
+    """直seed商品URLが403でも、次回通知に備えて購入不可状態へ戻す。"""
+    direct_url = (
+        "https://www.hermes.com/jp/ja/product/"
+        "%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-"
+        "%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB"
+        "%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-gm-H101672Bv00011/"
+    )
+    crawler = FailingHermesCrawler()
+
+    snapshots = crawler.crawl(make_config(seed_urls=(direct_url,)))
+
+    assert len(snapshots) == 1
+    assert snapshots[0].product_id == "sku#H101672B 00011"
+    assert snapshots[0].sku == "H101672B 00011"
+    assert snapshots[0].size == "GM"
+    assert snapshots[0].available is False
+    assert snapshots[0].availability_source == "seed-url-unreachable"
+
+
 def test_allowed_hosts_rejects_non_hermes_and_non_https_urls() -> None:
     """クロール先が HTTPS の Hermes ドメインに制限されることを確認する。"""
     assert is_allowed_https_url("https://www.hermes.com/jp/ja/", ("hermes.com",)) is True
@@ -252,13 +359,16 @@ def test_use_case_can_skip_initial_available_notification() -> None:
     assert repository.items[snapshot.product_id].available is True
 
 
-def make_config(notify_on_first_available: bool = True) -> MonitorConfig:
+def make_config(
+    notify_on_first_available: bool = True,
+    seed_urls: tuple[str, ...] = ("https://www.hermes.com/jp/ja/",),
+) -> MonitorConfig:
     """テスト用の最小 MonitorConfig を作る。"""
     return MonitorConfig(
-        seed_urls=("https://www.hermes.com/jp/ja/",),
+        seed_urls=seed_urls,
         allowed_hosts=("hermes.com",),
         notification_timezone="Asia/Tokyo",
-        target_keywords=("chaine d'ancre",),
+        target_keywords=("chaine d'ancre", "シェーヌダンクル"),
         target_sizes=("GM", "TGM"),
         notify_on_first_available=notify_on_first_available,
         page_limit=1,
@@ -292,6 +402,23 @@ class StaticCrawler:
 
     def crawl(self, config: MonitorConfig) -> list[ProductSnapshot]:
         return self._snapshots
+
+
+class StaticHtmlHermesCrawler(HermesProductCrawler):
+    """HTTP取得を固定HTMLで置き換える Hermes crawler fake。"""
+
+    def __init__(self, responses: dict[str, str]) -> None:
+        self._responses = responses
+
+    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+        return self._responses[url]
+
+
+class FailingHermesCrawler(HermesProductCrawler):
+    """HTTP取得が403になる Hermes crawler fake。"""
+
+    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+        raise HTTPError(url, 403, "Forbidden", hdrs=None, fp=None)
 
 
 class InMemoryRepository:

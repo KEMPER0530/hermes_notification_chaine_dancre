@@ -156,6 +156,61 @@ def parse_product_page(
     )
 
 
+def parse_embedded_product_list(
+    base_url: str,
+    html: str,
+    target_keywords: Sequence[str],
+    target_sizes: Sequence[str],
+) -> list[ProductSnapshot]:
+    """カテゴリHTML内の hermes-state から商品一覧 snapshot を抽出する。"""
+    state = extract_hermes_state(html)
+    if state is None:
+        return []
+
+    snapshots: dict[str, ProductSnapshot] = {}
+    for item in find_hermes_state_product_items(state):
+        snapshot = product_snapshot_from_hermes_state_item(
+            base_url,
+            item,
+            target_keywords=target_keywords,
+            target_sizes=target_sizes,
+        )
+        if snapshot:
+            snapshots[snapshot.product_id] = snapshot
+
+    return list(snapshots.values())
+
+
+def parse_product_seed_url(
+    url: str,
+    target_keywords: Sequence[str],
+    target_sizes: Sequence[str],
+) -> ProductSnapshot | None:
+    """取得不能な直seed商品URLを、購入可能未確認の snapshot として扱う。"""
+    if not looks_like_product_url(url):
+        return None
+
+    name = slug_name_from_url(url)
+    sku = extract_sku_from_text(url)
+    combined_for_match = " ".join([name, sku, url])
+    if target_keywords and not matches_any_keyword(combined_for_match, target_keywords):
+        return None
+
+    size = detect_size(target_sizes, name, sku, url)
+    if target_sizes and size not in {target_size.upper() for target_size in target_sizes}:
+        return None
+
+    return ProductSnapshot(
+        product_id=stable_product_id(sku, url),
+        name=name,
+        size=size,
+        url=url,
+        sku=sku or None,
+        available=False,
+        availability_source="seed-url-unreachable",
+    )
+
+
 def extract_product_links(
     html: str,
     base_url: str,
@@ -180,6 +235,125 @@ def extract_product_links(
         links.add(absolute)
 
     return sorted(links)
+
+
+def extract_hermes_state(html: str) -> dict[str, Any] | None:
+    """Angular SSR が埋め込む hermes-state JSON を取り出す。"""
+    pattern = re.compile(
+        r"<script[^>]+id=[\"']hermes-state[\"'][^>]*>(.*?)</script>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    match = pattern.search(html)
+    if not match:
+        return None
+
+    raw = unescape(match.group(1)).strip()
+    if not raw:
+        return None
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+    return data if isinstance(data, dict) else None
+
+
+def find_hermes_state_product_items(data: Any) -> list[dict[str, Any]]:
+    """hermes-state の階層から products.items の商品 dict を集める。"""
+    items: list[dict[str, Any]] = []
+
+    if isinstance(data, dict):
+        products = data.get("products")
+        if isinstance(products, dict) and isinstance(products.get("items"), list):
+            items.extend(item for item in products["items"] if isinstance(item, dict))
+
+        for value in data.values():
+            items.extend(find_hermes_state_product_items(value))
+    elif isinstance(data, list):
+        for value in data:
+            items.extend(find_hermes_state_product_items(value))
+
+    return items
+
+
+def product_snapshot_from_hermes_state_item(
+    base_url: str,
+    item: dict[str, Any],
+    target_keywords: Sequence[str],
+    target_sizes: Sequence[str],
+) -> ProductSnapshot | None:
+    """hermes-state の商品 dict を監視用 snapshot へ変換する。"""
+    product_url = hermes_state_product_url(base_url, as_text(item.get("url")))
+    name = first_non_empty(
+        as_text(item.get("title")),
+        as_text(item.get("name")),
+        slug_name_from_url(product_url),
+    )
+    sku = first_non_empty_or_none(
+        normalize_sku(as_text(item.get("sku"))),
+        extract_sku_from_text(f"{name} {product_url}"),
+    )
+
+    combined_for_match = " ".join(
+        [
+            name,
+            sku or "",
+            product_url,
+            as_text(item.get("slug")),
+            as_text(item.get("productCode")),
+        ]
+    )
+    if target_keywords and not matches_any_keyword(combined_for_match, target_keywords):
+        return None
+
+    size = detect_size(
+        target_sizes,
+        name,
+        sku or "",
+        product_url,
+        as_text(item.get("size")),
+        as_text(item.get("slug")),
+    )
+    if target_sizes and size not in {target_size.upper() for target_size in target_sizes}:
+        return None
+
+    return ProductSnapshot(
+        product_id=stable_product_id(sku, product_url),
+        name=name,
+        size=size,
+        url=product_url,
+        sku=sku,
+        available=availability_from_hermes_state_item(item),
+        availability_source="hermes-state",
+    )
+
+
+def hermes_state_product_url(base_url: str, value: str) -> str:
+    """hermes-state の /product/... URL を国/言語prefix付きの絶対URLにする。"""
+    if not value:
+        return normalize_url(base_url)
+
+    parsed_base = urlparse(base_url)
+    if value.startswith("/product/"):
+        path_parts = [part for part in parsed_base.path.split("/") if part]
+        locale_prefix = "/".join(path_parts[:2])
+        if locale_prefix:
+            value = f"/{locale_prefix}{value}"
+
+    return normalize_url(urljoin(base_url, value))
+
+
+def availability_from_hermes_state_item(item: dict[str, Any]) -> bool:
+    """カテゴリ商品JSONの stock 情報からオンライン購入可否を判定する。"""
+    stock = item.get("stock")
+    if not isinstance(stock, dict):
+        return False
+
+    if bool(stock.get("displayOnly")):
+        return False
+
+    return bool(stock.get("ecom")) or bool(stock.get("hasVariantInEcomStock"))
 
 
 def extract_metadata(html: str) -> MetadataExtractor:
@@ -310,7 +484,7 @@ def normalize_url(url: str) -> str:
 def stable_product_id(sku: str | None, url: str) -> str:
     """SKU が取れれば SKU、なければ URL hash で安定 ID を作る。"""
     if sku:
-        return f"sku#{sku}"
+        return f"sku#{normalize_sku(sku)}"
     digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:32]
     return f"url#{digest}"
 
@@ -361,7 +535,16 @@ def as_text(value: Any) -> str:
 def extract_sku_from_text(value: str) -> str:
     """Hermes の商品番号らしい H 始まりの識別子を抽出する。"""
     match = re.search(r"\bH[0-9A-Z]{6,}\b", value, flags=re.IGNORECASE)
-    return match.group(0).upper() if match else ""
+    return normalize_sku(match.group(0)) if match else ""
+
+
+def normalize_sku(value: str) -> str:
+    """URL slug 由来の H101672Bv00011 を H101672B 00011 表記へ寄せる。"""
+    normalized = normalize_space(value).upper()
+    match = re.fullmatch(r"(H\d{6}[A-Z])V([0-9A-Z]+)", normalized)
+    if match:
+        return f"{match.group(1)} {match.group(2)}"
+    return normalized
 
 
 def slug_name_from_url(url: str) -> str:
