@@ -186,6 +186,14 @@ def test_sns_notification_percent_encodes_japanese_product_url() -> None:
     assert all(ord(character) < 128 for character in expected_url)
 
 
+def test_ci_workflow_includes_all_chaine_dancre_tgm_direct_seed_urls() -> None:
+    """短時間入荷を拾うため、TGM候補の直URLをCDK deploy seedへ含める。"""
+    workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text()
+
+    for link_count in ("09", "10", "11", "12", "13", "14"):
+        assert f"tgm-H101995Bv000{link_count}/" in workflow
+
+
 def test_parse_embedded_product_list_detects_available_chaine_dancre_gm() -> None:
     """カテゴリHTMLのhermes-stateから対象GM商品を検知できることを確認する。"""
     html = """

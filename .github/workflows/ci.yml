@@ -56,8 +56,16 @@ jobs:
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       CDK_DEPLOY_REGION: ${{ vars.AWS_REGION }}
-      # カテゴリHTMLだけでは新着商品リンクを拾えないことがあるため、重要なGM商品URLを直接seedに足す。
-      SEED_URLS: ${{ vars.SEED_URLS }},https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-gm-H101672Bv00011/
+      # カテゴリHTMLに出ない短時間入荷を拾うため、重要なGM/TGM商品URLを直接seedに足す。
+      SEED_URLS: >-
+        ${{ vars.SEED_URLS }},
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-gm-H101672Bv00011/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00009/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00010/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00011/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00012/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00013/,
+        https://www.hermes.com/jp/ja/product/%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-tgm-H101995Bv00014/
       ALLOWED_HOSTS: ${{ vars.ALLOWED_HOSTS }}
       NOTIFICATION_TIMEZONE: ${{ vars.NOTIFICATION_TIMEZONE }}
       SCHEDULE_MINUTES: ${{ vars.SCHEDULE_MINUTES }}
