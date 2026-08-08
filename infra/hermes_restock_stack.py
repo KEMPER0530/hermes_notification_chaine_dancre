@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 from aws_cdk import CfnOutput, Duration, RemovalPolicy, Stack, Tags
+from aws_cdk import aws_cloudwatch as cloudwatch
+from aws_cdk import aws_cloudwatch_actions as cloudwatch_actions
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_events as events
 from aws_cdk import aws_events_targets as targets
@@ -12,6 +14,7 @@ from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_logs as logs
 from aws_cdk import aws_sns as sns
 from aws_cdk import aws_sns_subscriptions as subscriptions
+from aws_cdk import custom_resources as cr
 from constructs import Construct
 
 
@@ -91,6 +94,82 @@ class HermesNotificationChaineDancreStack(Stack):
 
         for phone_number in notification_phone_numbers:
             topic.add_subscription(subscriptions.SmsSubscription(phone_number))
+
+        # SNS SMS の配送成否を CloudWatch Logs に残し、SMS未着の理由を後から追えるようにする。
+        sms_delivery_status_role = iam.Role(
+            self,
+            "SmsDeliveryStatusLoggingRole",
+            assumed_by=iam.ServicePrincipal("sns.amazonaws.com"),
+        )
+        sms_delivery_status_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:PutMetricFilter",
+                    "logs:PutRetentionPolicy",
+                ],
+                resources=["*"],
+            )
+        )
+        sms_status_attributes = {
+            "DeliveryStatusIAMRole": sms_delivery_status_role.role_arn,
+            "DeliveryStatusSuccessSamplingRate": "100",
+            "DefaultSMSType": "Transactional",
+        }
+        sms_delivery_status_settings = cr.AwsCustomResource(
+            self,
+            "SmsDeliveryStatusSettings",
+            on_create=cr.AwsSdkCall(
+                service="SNS",
+                action="setSMSAttributes",
+                parameters={"attributes": sms_status_attributes},
+                physical_resource_id=cr.PhysicalResourceId.of(
+                    f"{PROJECT_NAME}_sms_delivery_status_settings"
+                ),
+            ),
+            on_update=cr.AwsSdkCall(
+                service="SNS",
+                action="setSMSAttributes",
+                parameters={"attributes": sms_status_attributes},
+                physical_resource_id=cr.PhysicalResourceId.of(
+                    f"{PROJECT_NAME}_sms_delivery_status_settings"
+                ),
+            ),
+            install_latest_aws_sdk=False,
+            policy=cr.AwsCustomResourcePolicy.from_statements(
+                [
+                    iam.PolicyStatement(actions=["sns:SetSMSAttributes"], resources=["*"]),
+                    iam.PolicyStatement(
+                        actions=["iam:PassRole"],
+                        resources=[sms_delivery_status_role.role_arn],
+                        conditions={"StringEquals": {"iam:PassedToService": "sns.amazonaws.com"}},
+                    ),
+                ]
+            ),
+        )
+        sms_delivery_status_settings.node.add_dependency(sms_delivery_status_role)
+
+        notification_failure_alarm = cloudwatch.Alarm(
+            self,
+            "NotificationFailureAlarm",
+            alarm_name=f"{PROJECT_NAME}_sns_notification_failed",
+            alarm_description="SNS Topic の通知配信失敗を検知します。SMS未着時の切り分けに使います。",
+            metric=cloudwatch.Metric(
+                namespace="AWS/SNS",
+                metric_name="NumberOfNotificationsFailed",
+                dimensions_map={"TopicName": topic.topic_name},
+                statistic="Sum",
+                period=Duration.minutes(1),
+            ),
+            threshold=1,
+            evaluation_periods=1,
+            datapoints_to_alarm=1,
+            comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+            treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
+        )
+        notification_failure_alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))
 
         lambda_path = Path(__file__).resolve().parents[1] / "lambda" / "monitor"
         # log_retention helper は広い IAM を作るため、明示 LogGroup で最小権限化する。
@@ -183,6 +262,11 @@ class HermesNotificationChaineDancreStack(Stack):
             self,
             "SmsSubscriptionStatus",
             value="created" if notification_phone_numbers else "not configured",
+        )
+        CfnOutput(
+            self,
+            "NotificationFailureAlarmName",
+            value=notification_failure_alarm.alarm_name,
         )
 
     def _context_or_env(self, context_key: str, env_key: str, default: str) -> str:

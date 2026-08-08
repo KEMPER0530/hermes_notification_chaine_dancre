@@ -34,6 +34,8 @@ lambda/monitor/
 - Lambda: 商品一覧/商品ページを取得し、対象商品の購入可否を判定
 - DynamoDB: 商品ごとの前回状態を保存
 - SNS Topic: 入荷通知メール/SMSを配信
+- CloudWatch Alarm: SNS 配信失敗を検知
+- SNS SMS delivery status logging: SMS配送の成功/失敗理由を CloudWatch Logs に保存
 
 ## セットアップ
 
@@ -60,6 +62,8 @@ cdk deploy HermesNotificationChaineDancreStack \
 ```
 
 SNS Email は初回デプロイ後、送信先メールアドレスに確認メールが届きます。メール内の確認リンクを開くまで通知は配信されません。SMS は E.164 形式、たとえば日本の番号なら `+819012345678` のように指定します。SMS 配信可否や上限は AWS アカウントと国ごとの SNS SMS 設定に依存します。
+
+SMS の配送失敗は `NumberOfNotificationsFailed` の CloudWatch Alarm で検知します。SMS 自体が失敗している場合に備え、`NOTIFICATION_EMAILS` も設定してメール購読を併用する運用を推奨します。
 
 ## 主な設定
 
@@ -99,6 +103,7 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 | --- | --- |
 | `AWS_ROLE_ARN` | GitHub Actions が AssumeRole する IAM Role ARN |
 | `NOTIFICATION_PHONE_NUMBER` | SNS SMS の通知先電話番号 |
+| `NOTIFICATION_EMAILS` | SNS Email の通知先メールアドレス。カンマ区切り |
 
 `production` Environment には次の Variables を設定します。
 
@@ -122,6 +127,8 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 各ページでは、まず `application/ld+json` の Product schema から商品名、SKU、availability を読みます。取れない場合は `og:title`、`h1`、`title`、本文テキストを使って補完します。対象判定は `targetKeywords` に `シェーヌダンクル` 系の文字列が含まれるか、かつ `targetSizes` の `GM` / `TGM` が見つかるかで行います。
 
 購入可否は JSON-LD の `InStock` / `OutOfStock` を優先し、取れない場合は「カートに追加」「在庫なし」などのページ内文言で fallback 判定します。前回 DynamoDB で `available=false`、今回 `available=true` になった場合に SNS へ通知します。
+
+Hermes が商品直URLを `403 Forbidden` で拒否した場合は、想定内のアクセス拒否として商品状態に採用せず、CloudWatch Logs の WARNING にも出しません。カテゴリページや取得できた商品ページから購入可能が確認できた場合だけ状態更新・通知します。
 
 ## ローカル確認
 
