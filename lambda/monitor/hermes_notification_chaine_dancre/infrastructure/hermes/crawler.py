@@ -49,6 +49,9 @@ class HermesProductCrawler:
                     timeout_seconds=config.timeout_seconds,
                 )
             except (HTTPError, URLError, TimeoutError, UnicodeError, ValueError) as exc:
+                # Hermes 側の bot 対策による直URL 403 は想定内。商品状態にもログにも採用しない。
+                if is_forbidden_http_error(exc):
+                    continue
                 logger.warning("Failed to fetch %s: %s", normalized_url, exc)
                 fallback_snapshot = parse_product_seed_url(
                     normalized_url,
@@ -132,3 +135,8 @@ def is_allowed_host(netloc: str, allowed_hosts: tuple[str, ...]) -> bool:
     host = netloc.split("@")[-1].split(":")[0].strip(".").lower()
     normalized_allowed_hosts = tuple(item.strip(".").lower() for item in allowed_hosts if item)
     return any(host == allowed or host.endswith(f".{allowed}") for allowed in normalized_allowed_hosts)
+
+
+def is_forbidden_http_error(exc: BaseException) -> bool:
+    """Hermes が拒否した 403 応答かを判定する。"""
+    return isinstance(exc, HTTPError) and exc.code == 403

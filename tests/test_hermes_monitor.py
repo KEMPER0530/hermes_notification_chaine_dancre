@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -279,14 +280,14 @@ def test_crawler_uses_embedded_product_list_from_category_page() -> None:
 
 
 def test_crawler_records_unreachable_direct_seed_as_unavailable_snapshot() -> None:
-    """直seed商品URLが403でも、次回通知に備えて購入不可状態へ戻す。"""
+    """直seed商品URLが403以外で失敗した場合は、購入不可状態へ戻す。"""
     direct_url = (
         "https://www.hermes.com/jp/ja/product/"
         "%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-"
         "%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB"
         "%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-gm-H101672Bv00011/"
     )
-    crawler = FailingHermesCrawler()
+    crawler = FailingHermesCrawler(status_code=500)
 
     snapshots = crawler.crawl(make_config(seed_urls=(direct_url,)))
 
@@ -296,6 +297,26 @@ def test_crawler_records_unreachable_direct_seed_as_unavailable_snapshot() -> No
     assert snapshots[0].size == "GM"
     assert snapshots[0].available is False
     assert snapshots[0].availability_source == "seed-url-unreachable"
+
+
+def test_crawler_ignores_forbidden_direct_seed_without_warning(caplog) -> None:
+    """Hermes の403は想定内として商品状態にもWARNINGログにも採用しない。"""
+    direct_url = (
+        "https://www.hermes.com/jp/ja/product/"
+        "%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-"
+        "%E3%80%8A%E3%82%B7%E3%82%A7%E3%83%BC%E3%83%8C%E3%83%BB"
+        "%E3%83%80%E3%83%B3%E3%82%AF%E3%83%AB%E3%80%8B-gm-H101672Bv00011/"
+    )
+    caplog.set_level(
+        logging.WARNING,
+        logger="hermes_notification_chaine_dancre.infrastructure.hermes.crawler",
+    )
+    crawler = FailingHermesCrawler(status_code=403)
+
+    snapshots = crawler.crawl(make_config(seed_urls=(direct_url,)))
+
+    assert snapshots == []
+    assert "Failed to fetch" not in caplog.text
 
 
 def test_allowed_hosts_rejects_non_hermes_and_non_https_urls() -> None:
@@ -425,8 +446,12 @@ class StaticHtmlHermesCrawler(HermesProductCrawler):
 class FailingHermesCrawler(HermesProductCrawler):
     """HTTP取得が403になる Hermes crawler fake。"""
 
+    def __init__(self, status_code: int) -> None:
+        self._status_code = status_code
+
     def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
-        raise HTTPError(url, 403, "Forbidden", hdrs=None, fp=None)
+        reason = "Forbidden" if self._status_code == 403 else "Server Error"
+        raise HTTPError(url, self._status_code, reason, hdrs=None, fp=None)
 
 
 class InMemoryRepository:
