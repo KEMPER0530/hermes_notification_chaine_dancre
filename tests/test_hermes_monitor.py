@@ -299,8 +299,8 @@ def test_crawler_records_unreachable_direct_seed_as_unavailable_snapshot() -> No
     assert snapshots[0].availability_source == "seed-url-unreachable"
 
 
-def test_crawler_ignores_forbidden_direct_seed_without_warning(caplog) -> None:
-    """Hermes の403は想定内として商品状態にもWARNINGログにも採用しない。"""
+def test_crawler_records_forbidden_direct_seed_as_unavailable_without_warning(caplog) -> None:
+    """Hermes の403はWARNINGに出さず、次回入荷通知に備えて購入不可状態へ戻す。"""
     direct_url = (
         "https://www.hermes.com/jp/ja/product/"
         "%E3%83%96%E3%83%AC%E3%82%B9%E3%83%AC%E3%83%83%E3%83%88-"
@@ -315,7 +315,12 @@ def test_crawler_ignores_forbidden_direct_seed_without_warning(caplog) -> None:
 
     snapshots = crawler.crawl(make_config(seed_urls=(direct_url,)))
 
-    assert snapshots == []
+    assert len(snapshots) == 1
+    assert snapshots[0].product_id == "sku#H101672B 00011"
+    assert snapshots[0].sku == "H101672B 00011"
+    assert snapshots[0].size == "GM"
+    assert snapshots[0].available is False
+    assert snapshots[0].availability_source == "seed-url-forbidden"
     assert "Failed to fetch" not in caplog.text
 
 
@@ -388,6 +393,44 @@ def test_use_case_can_skip_initial_available_notification() -> None:
     assert repository.items[snapshot.product_id].available is True
 
 
+def test_use_case_resets_available_state_when_direct_seed_is_forbidden() -> None:
+    """直seedの403で前回 available を False に戻し、次の入荷通知に備える。"""
+    snapshot = ProductSnapshot(
+        product_id="sku#H101672B 00011",
+        name="ブレスレット 《シェーヌ・ダンクル》 GM",
+        size="GM",
+        url="https://www.hermes.com/jp/ja/product/ブレスレット-《シェーヌ・ダンクル》-gm-H101672Bv00011/",
+        sku="H101672B 00011",
+        available=False,
+        availability_source="seed-url-forbidden",
+    )
+    repository = InMemoryRepository(
+        {
+            snapshot.product_id: ProductState(
+                product_id=snapshot.product_id,
+                name=snapshot.name,
+                size=snapshot.size,
+                url=snapshot.url,
+                sku=snapshot.sku,
+                available=True,
+                availability_source="json-ld",
+                last_seen_at="2026-01-01T00:00:00+09:00",
+                last_available_at="2026-01-01T00:00:00+09:00",
+                last_notification_at="2026-01-01T00:00:00+09:00",
+            )
+        }
+    )
+    notifier = CollectingNotifier()
+
+    result = build_use_case([snapshot], repository, notifier).execute(make_config())
+
+    assert result.notifications == 0
+    assert notifier.events == []
+    assert repository.items[snapshot.product_id].available is False
+    assert repository.items[snapshot.product_id].availability_source == "seed-url-forbidden"
+    assert repository.items[snapshot.product_id].last_available_at == "2026-01-01T00:00:00+09:00"
+
+
 def make_config(
     notify_on_first_available: bool = True,
     seed_urls: tuple[str, ...] = ("https://www.hermes.com/jp/ja/",),
@@ -444,7 +487,7 @@ class StaticHtmlHermesCrawler(HermesProductCrawler):
 
 
 class FailingHermesCrawler(HermesProductCrawler):
-    """HTTP取得が403になる Hermes crawler fake。"""
+    """指定した HTTP status で取得失敗する Hermes crawler fake。"""
 
     def __init__(self, status_code: int) -> None:
         self._status_code = status_code

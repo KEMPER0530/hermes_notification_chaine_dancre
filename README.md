@@ -128,7 +128,7 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 
 購入可否は JSON-LD の `InStock` / `OutOfStock` を優先し、取れない場合は「カートに追加」「在庫なし」などのページ内文言で fallback 判定します。前回 DynamoDB で `available=false`、今回 `available=true` になった場合に SNS へ通知します。
 
-Hermes が商品直URLを `403 Forbidden` で拒否した場合は、想定内のアクセス拒否として商品状態に採用せず、CloudWatch Logs の WARNING にも出しません。カテゴリページや取得できた商品ページから購入可能が確認できた場合だけ状態更新・通知します。
+Hermes が商品直URLを `403 Forbidden` で拒否した場合は、想定内のアクセス拒否として CloudWatch Logs の WARNING には出しません。直seed商品URLは次回の `403 -> 200/InStock` 遷移を通知できるよう、購入不可状態として保存します。カテゴリページや取得できた商品ページから購入可能が確認できた場合だけ入荷通知します。
 
 ## ローカル確認
 

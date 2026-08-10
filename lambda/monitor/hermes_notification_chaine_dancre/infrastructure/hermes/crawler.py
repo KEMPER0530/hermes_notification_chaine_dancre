@@ -49,8 +49,16 @@ class HermesProductCrawler:
                     timeout_seconds=config.timeout_seconds,
                 )
             except (HTTPError, URLError, TimeoutError, UnicodeError, ValueError) as exc:
-                # Hermes 側の bot 対策による直URL 403 は想定内。商品状態にもログにも採用しない。
+                # Hermes 側の bot 対策による直URL 403 は想定内。WARNING には出さず、次回通知に備えて在庫なしとして扱う。
                 if is_forbidden_http_error(exc):
+                    fallback_snapshot = parse_product_seed_url(
+                        normalized_url,
+                        target_keywords=config.target_keywords,
+                        target_sizes=config.target_sizes,
+                        availability_source="seed-url-forbidden",
+                    )
+                    if fallback_snapshot:
+                        snapshots.setdefault(fallback_snapshot.product_id, fallback_snapshot)
                     continue
                 logger.warning("Failed to fetch %s: %s", normalized_url, exc)
                 fallback_snapshot = parse_product_seed_url(

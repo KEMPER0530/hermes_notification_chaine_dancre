@@ -185,6 +185,7 @@ def parse_product_seed_url(
     url: str,
     target_keywords: Sequence[str],
     target_sizes: Sequence[str],
+    availability_source: str = "seed-url-unreachable",
 ) -> ProductSnapshot | None:
     """取得不能な直seed商品URLを、購入可能未確認の snapshot として扱う。"""
     if not looks_like_product_url(url):
@@ -207,7 +208,7 @@ def parse_product_seed_url(
         url=url,
         sku=sku or None,
         available=False,
-        availability_source="seed-url-unreachable",
+        availability_source=availability_source,
     )
 
 
