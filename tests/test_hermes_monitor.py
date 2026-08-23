@@ -187,10 +187,14 @@ def test_sns_notification_percent_encodes_japanese_product_url() -> None:
     assert all(ord(character) < 128 for character in expected_url)
 
 
-def test_ci_workflow_includes_all_chaine_dancre_tgm_direct_seed_urls() -> None:
-    """短時間入荷を拾うため、TGM候補の直URLをCDK deploy seedへ含める。"""
+def test_ci_workflow_includes_chaine_dancre_direct_and_alternative_seed_urls() -> None:
+    """短時間入荷を拾うため、直URLに加えてSKU検索とコレクションURLをdeploy seedへ含める。"""
     workflow = (Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml").read_text()
 
+    assert "search/?s=H101672B" in workflow
+    assert "search/?s=H101995B" in workflow
+    assert "category/jewelry/collections/chaine-d-ancre/" in workflow
+    assert "gm-H101672Bv00011/" in workflow
     for link_count in ("09", "10", "11", "12", "13", "14"):
         assert f"tgm-H101995Bv000{link_count}/" in workflow
 
@@ -276,6 +280,40 @@ def test_crawler_uses_embedded_product_list_from_category_page() -> None:
 
     assert len(snapshots) == 1
     assert snapshots[0].product_id == "sku#H101672B 00011"
+    assert snapshots[0].availability_source == "hermes-state"
+
+
+def test_crawler_uses_embedded_product_list_from_sku_search_page() -> None:
+    """SKU検索ページのhermes-stateから対象商品を検知できることを確認する。"""
+    search_url = "https://www.hermes.com/jp/ja/search/?s=H101995B"
+    html = """
+    <script id="hermes-state" type="application/json">
+      {
+        "search-state": {
+          "b": {
+            "products": {
+              "items": [
+                {
+                  "sku": "H101995B 00009",
+                  "title": "ブレスレット 《シェーヌ・ダンクル》 TGM",
+                  "url": "/product/ブレスレット-《シェーヌ・ダンクル》-tgm-H101995Bv00009/",
+                  "stock": {"ecom": true, "displayOnly": false}
+                }
+              ]
+            }
+          }
+        }
+      }
+    </script>
+    """
+    crawler = StaticHtmlHermesCrawler({search_url: html})
+
+    snapshots = crawler.crawl(make_config(seed_urls=(search_url,)))
+
+    assert len(snapshots) == 1
+    assert snapshots[0].product_id == "sku#H101995B 00009"
+    assert snapshots[0].size == "TGM"
+    assert snapshots[0].available is True
     assert snapshots[0].availability_source == "hermes-state"
 
 
