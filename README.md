@@ -122,7 +122,7 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 
 ## クロールの仕組み
 
-1回の Lambda 実行では、`seedUrls` で指定した URL を起点に `allowedHosts` で許可された HTTPS URL だけを辿ります。商品ページらしい URL、または `targetKeywords` に一致する URL をキューに追加し、`pageLimit` に達するまで取得します。
+1回の Lambda 実行では、`seedUrls` で指定した URL を起点に `allowedHosts` で許可された HTTPS URL だけを辿ります。商品ページらしい URL、または `targetKeywords` に一致する URL をキューに追加し、`pageLimit` に達するまで取得します。GitHub Actions から本番デプロイする場合は、環境変数の `SEED_URLS` に加えて、GM/TGM の SKU検索ページ、シェーヌダンクルのコレクションページ、GM/TGM の直商品URLを deploy job 側で自動的に追加します。
 
 各ページでは、まず `application/ld+json` の Product schema から商品名、SKU、availability を読みます。取れない場合は `og:title`、`h1`、`title`、本文テキストを使って補完します。対象判定は `targetKeywords` に `シェーヌダンクル` 系の文字列が含まれるか、かつ `targetSizes` の `GM` / `TGM` が見つかるかで行います。
 
