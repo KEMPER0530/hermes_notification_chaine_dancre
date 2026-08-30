@@ -45,6 +45,12 @@ class HermesNotificationChaineDancreStack(Stack):
             singular_context_key="notificationPhoneNumber",
             singular_env_key="NOTIFICATION_PHONE_NUMBER",
         )
+        alarm_notification_emails = self._notification_values(
+            plural_context_key="alarmNotificationEmails",
+            plural_env_key="ALARM_NOTIFICATION_EMAILS",
+            singular_context_key="alarmNotificationEmail",
+            singular_env_key="ALARM_NOTIFICATION_EMAIL",
+        )
         seed_urls = self._context_or_env("seedUrls", "SEED_URLS", "")
         schedule_minutes = int(self._context_or_env("scheduleMinutes", "SCHEDULE_MINUTES", "5"))
         target_keywords = self._context_or_env("targetKeywords", "TARGET_KEYWORDS", DEFAULT_KEYWORDS)
@@ -58,6 +64,9 @@ class HermesNotificationChaineDancreStack(Stack):
         notification_timezone = self._context_or_env(
             "notificationTimezone", "NOTIFICATION_TIMEZONE", "Asia/Tokyo"
         )
+        sms_monthly_spend_limit = self._context_or_env(
+            "smsMonthlySpendLimit", "SMS_MONTHLY_SPEND_LIMIT", "5"
+        )
 
         self._validate_settings(
             schedule_minutes=schedule_minutes,
@@ -66,6 +75,7 @@ class HermesNotificationChaineDancreStack(Stack):
             seed_urls=seed_urls,
             notification_emails=notification_emails,
             notification_phone_numbers=notification_phone_numbers,
+            sms_monthly_spend_limit=sms_monthly_spend_limit,
         )
 
         # 前回の購入可否を保持するため、コストを抑えやすいオンデマンド課金にする。
@@ -95,6 +105,17 @@ class HermesNotificationChaineDancreStack(Stack):
         for phone_number in notification_phone_numbers:
             topic.add_subscription(subscriptions.SmsSubscription(phone_number))
 
+        alarm_topic = sns.Topic(
+            self,
+            "OpsAlertTopic",
+            topic_name=f"{PROJECT_NAME}_ops_alerts",
+            display_name=f"{PROJECT_NAME}_ops",
+        )
+
+        # 入荷通知SMSが失敗してもAlarm通知が巻き込まれないよう、運用通知は別Topicへ分離する。
+        for email in alarm_notification_emails:
+            alarm_topic.add_subscription(subscriptions.EmailSubscription(email))
+
         # SNS SMS の配送成否を CloudWatch Logs に残し、SMS未着の理由を後から追えるようにする。
         sms_delivery_status_role = iam.Role(
             self,
@@ -118,6 +139,8 @@ class HermesNotificationChaineDancreStack(Stack):
             "DeliveryStatusSuccessSamplingRate": "100",
             "DefaultSMSType": "Transactional",
         }
+        if sms_monthly_spend_limit:
+            sms_status_attributes["MonthlySpendLimit"] = sms_monthly_spend_limit
         sms_delivery_status_settings = cr.AwsCustomResource(
             self,
             "SmsDeliveryStatusSettings",
@@ -169,7 +192,7 @@ class HermesNotificationChaineDancreStack(Stack):
             comparison_operator=cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
             treat_missing_data=cloudwatch.TreatMissingData.NOT_BREACHING,
         )
-        notification_failure_alarm.add_alarm_action(cloudwatch_actions.SnsAction(topic))
+        notification_failure_alarm.add_alarm_action(cloudwatch_actions.SnsAction(alarm_topic))
 
         lambda_path = Path(__file__).resolve().parents[1] / "lambda" / "monitor"
         # log_retention helper は広い IAM を作るため、明示 LogGroup で最小権限化する。
@@ -252,6 +275,7 @@ class HermesNotificationChaineDancreStack(Stack):
 
         CfnOutput(self, "StateTableName", value=table.table_name)
         CfnOutput(self, "NotificationTopicArn", value=topic.topic_arn)
+        CfnOutput(self, "OpsAlertTopicArn", value=alarm_topic.topic_arn)
         CfnOutput(self, "MonitorFunctionName", value=monitor_fn.function_name)
         CfnOutput(
             self,
@@ -265,6 +289,12 @@ class HermesNotificationChaineDancreStack(Stack):
         )
         CfnOutput(
             self,
+            "AlarmEmailSubscriptionStatus",
+            value="created" if alarm_notification_emails else "not configured",
+        )
+        CfnOutput(self, "SmsMonthlySpendLimit", value=sms_monthly_spend_limit)
+        CfnOutput(
+            self,
             "NotificationFailureAlarmName",
             value=notification_failure_alarm.alarm_name,
         )
@@ -274,7 +304,8 @@ class HermesNotificationChaineDancreStack(Stack):
         value = self.node.try_get_context(context_key)
         if value is None:
             value = os.getenv(env_key, default)
-        return str(value)
+        normalized_value = str(value).strip()
+        return normalized_value if normalized_value else default
 
     def _notification_values(
         self,
@@ -306,6 +337,7 @@ class HermesNotificationChaineDancreStack(Stack):
         seed_urls: str,
         notification_emails: tuple[str, ...],
         notification_phone_numbers: tuple[str, ...],
+        sms_monthly_spend_limit: str,
     ) -> None:
         """過剰クロールや通知先未設定をデプロイ前に検出する。"""
         if schedule_minutes < 5:
@@ -320,3 +352,8 @@ class HermesNotificationChaineDancreStack(Stack):
             raise ValueError(
                 "At least one notification email or phone number must be configured."
             )
+        try:
+            if float(sms_monthly_spend_limit) <= 0:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("smsMonthlySpendLimit must be a positive number.") from exc
