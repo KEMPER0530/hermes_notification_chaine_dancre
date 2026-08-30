@@ -56,7 +56,7 @@ def test_ops_topic_has_email_subscription() -> None:
 
 
 def test_sms_monthly_spend_limit_is_managed_by_custom_resource() -> None:
-    """SNS SMS の月間利用上限を CDK の custom resource から設定する。"""
+    """SNS SMS の月間利用上限を、安全な既定値で custom resource から設定する。"""
     template = synth_template()
     resources = template.to_json()["Resources"]
     custom_resource = next(
@@ -69,7 +69,7 @@ def test_sms_monthly_spend_limit_is_managed_by_custom_resource() -> None:
     )
 
     assert "MonthlySpendLimit" in create_payload
-    assert "5" in create_payload
+    assert "1" in create_payload
 
 
 def synth_template() -> Template:
@@ -79,7 +79,6 @@ def synth_template() -> Template:
             "seedUrls": "https://www.hermes.com/jp/ja/",
             "notificationPhoneNumber": "+819012345678",
             "alarmNotificationEmails": "ops@example.com",
-            "smsMonthlySpendLimit": "5",
         }
     )
     stack = HermesNotificationChaineDancreStack(
