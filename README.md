@@ -1,6 +1,6 @@
 # hermes_notification_chaine_dancre
 
-エルメス公式サイトの指定URLを定期確認し、シェーヌダンクルの `GM` / `TGM` が購入可能になったらメール通知するための AWS CDK プロジェクトです。
+エルメス公式サイトの指定URLを定期確認し、シェーヌダンクルの `GM` / `TGM` が購入可能になったらメール/SMS通知するための AWS CDK プロジェクトです。
 
 Lambda は Python で実装しています。構成は次の通りです。
 
@@ -34,7 +34,8 @@ lambda/monitor/
 - Lambda: 商品一覧/商品ページを取得し、対象商品の購入可否を判定
 - DynamoDB: 商品ごとの前回状態を保存
 - SNS Topic: 入荷通知メール/SMSを配信
-- CloudWatch Alarm: SNS 配信失敗を検知
+- SNS Topic: SMS失敗などの運用Alarmをメールへ配信
+- CloudWatch Alarm: 入荷通知用SNS Topicの配信失敗を検知
 - SNS SMS delivery status logging: SMS配送の成功/失敗理由を CloudWatch Logs に保存
 
 ## セットアップ
@@ -57,13 +58,15 @@ cdk bootstrap aws://ACCOUNT_ID/ap-northeast-1
 cdk deploy HermesNotificationChaineDancreStack \
   -c notificationEmails="you@example.com" \
   -c notificationPhoneNumbers="+819012345678" \
+  -c alarmNotificationEmails="ops@example.com" \
+  -c smsMonthlySpendLimit=5 \
   -c seedUrls="https://www.hermes.com/jp/ja/" \
   -c scheduleMinutes=5
 ```
 
 SNS Email は初回デプロイ後、送信先メールアドレスに確認メールが届きます。メール内の確認リンクを開くまで通知は配信されません。SMS は E.164 形式、たとえば日本の番号なら `+819012345678` のように指定します。SMS 配信可否や上限は AWS アカウントと国ごとの SNS SMS 設定に依存します。
 
-SMS の配送失敗は `NumberOfNotificationsFailed` の CloudWatch Alarm で検知します。SMS 自体が失敗している場合に備え、`NOTIFICATION_EMAILS` も設定してメール購読を併用する運用を推奨します。
+SMS の配送失敗は `NumberOfNotificationsFailed` の CloudWatch Alarm で検知します。Alarm 通知が入荷通知SMSの失敗に巻き込まれないよう、Alarm は入荷通知Topicとは別の運用Topicへ送ります。`ALARM_NOTIFICATION_EMAILS` を設定し、確認メール内のリンクを開いて購読を承認してください。
 
 ## 主な設定
 
@@ -75,6 +78,9 @@ CDK context または環境変数で変更できます。
 | `notificationEmails` | なし | SNS Email の通知先。カンマ区切り |
 | `notificationPhoneNumber` | なし | SNS SMS の通知先。単体指定用 |
 | `notificationPhoneNumbers` | なし | SNS SMS の通知先。カンマ区切り |
+| `alarmNotificationEmail` | なし | 運用Alarm用SNS Emailの通知先。単体指定用 |
+| `alarmNotificationEmails` | なし | 運用Alarm用SNS Emailの通知先。カンマ区切り |
+| `smsMonthlySpendLimit` | `5` | SNS SMS の月間利用上限USD。AWSアカウント側の上限を超える値は承認が必要 |
 | `notificationTimezone` | `Asia/Tokyo` | 通知本文と DynamoDB に保存する確認時刻のタイムゾーン |
 | `seedUrls` | なし | クロール開始URL。カンマ区切り |
 | `allowedHosts` | `hermes.com` | クロールを許可するホスト。カンマ区切り |
@@ -103,7 +109,6 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 | --- | --- |
 | `AWS_ROLE_ARN` | GitHub Actions が AssumeRole する IAM Role ARN |
 | `NOTIFICATION_PHONE_NUMBER` | SNS SMS の通知先電話番号 |
-| `NOTIFICATION_EMAILS` | SNS Email の通知先メールアドレス。カンマ区切り |
 
 `production` Environment には次の Variables を設定します。
 
@@ -119,6 +124,9 @@ PR ではテストだけを実行し、`main` に merge された変更は `prod
 | `NOTIFY_ON_FIRST_AVAILABLE` | 初回 available を通知するか |
 | `PAGE_LIMIT` | 1回の最大取得ページ数 |
 | `FETCH_DELAY_MS` | 連続取得の待機時間 |
+| `SMS_MONTHLY_SPEND_LIMIT` | SNS SMS の月間利用上限USD |
+| `NOTIFICATION_EMAILS` | 入荷通知用SNS Emailの通知先。カンマ区切り |
+| `ALARM_NOTIFICATION_EMAILS` | 運用Alarm用SNS Emailの通知先。カンマ区切り |
 
 ## クロールの仕組み
 
