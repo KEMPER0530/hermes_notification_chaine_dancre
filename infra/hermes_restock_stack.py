@@ -65,7 +65,7 @@ class HermesNotificationChaineDancreStack(Stack):
             "notificationTimezone", "NOTIFICATION_TIMEZONE", "Asia/Tokyo"
         )
         sms_monthly_spend_limit = self._context_or_env(
-            "smsMonthlySpendLimit", "SMS_MONTHLY_SPEND_LIMIT", "5"
+            "smsMonthlySpendLimit", "SMS_MONTHLY_SPEND_LIMIT", "1"
         )
 
         self._validate_settings(

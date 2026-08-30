@@ -59,7 +59,7 @@ cdk deploy HermesNotificationChaineDancreStack \
   -c notificationEmails="you@example.com" \
   -c notificationPhoneNumbers="+819012345678" \
   -c alarmNotificationEmails="ops@example.com" \
-  -c smsMonthlySpendLimit=5 \
+  -c smsMonthlySpendLimit=1 \
   -c seedUrls="https://www.hermes.com/jp/ja/" \
   -c scheduleMinutes=5
 ```
@@ -80,7 +80,7 @@ CDK context または環境変数で変更できます。
 | `notificationPhoneNumbers` | なし | SNS SMS の通知先。カンマ区切り |
 | `alarmNotificationEmail` | なし | 運用Alarm用SNS Emailの通知先。単体指定用 |
 | `alarmNotificationEmails` | なし | 運用Alarm用SNS Emailの通知先。カンマ区切り |
-| `smsMonthlySpendLimit` | `5` | SNS SMS の月間利用上限USD。AWSアカウント側の上限を超える値は承認が必要 |
+| `smsMonthlySpendLimit` | `1` | SNS SMS の月間利用上限USD。AWSアカウント側の上限を超える値は承認が必要 |
 | `notificationTimezone` | `Asia/Tokyo` | 通知本文と DynamoDB に保存する確認時刻のタイムゾーン |
 | `seedUrls` | なし | クロール開始URL。カンマ区切り |
 | `allowedHosts` | `hermes.com` | クロールを許可するホスト。カンマ区切り |
