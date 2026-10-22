@@ -520,7 +520,7 @@ class StaticHtmlHermesCrawler(HermesProductCrawler):
     def __init__(self, responses: dict[str, str]) -> None:
         self._responses = responses
 
-    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int, allowed_hosts: tuple[str, ...]) -> str:
         return self._responses[url]
 
 
@@ -530,7 +530,7 @@ class FailingHermesCrawler(HermesProductCrawler):
     def __init__(self, status_code: int) -> None:
         self._status_code = status_code
 
-    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int, allowed_hosts: tuple[str, ...]) -> str:
         reason = "Forbidden" if self._status_code == 403 else "Server Error"
         raise HTTPError(url, self._status_code, reason, hdrs=None, fp=None)
 

@@ -6,7 +6,7 @@ import logging
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlparse, urlsplit, urlunsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from hermes_notification_chaine_dancre.application.config import MonitorConfig
 from hermes_notification_chaine_dancre.domain.models import ProductSnapshot
@@ -38,6 +38,8 @@ class HermesProductCrawler:
         while queue and len(visited) < config.page_limit:
             url = queue.pop(0)
             normalized_url = normalize_url(url)
+            if not is_allowed_https_url(normalized_url, config.allowed_hosts):
+                continue
             if normalized_url in visited:
                 continue
 
@@ -47,6 +49,7 @@ class HermesProductCrawler:
                     normalized_url,
                     user_agent=config.user_agent,
                     timeout_seconds=config.timeout_seconds,
+                    allowed_hosts=config.allowed_hosts,
                 )
             except (HTTPError, URLError, TimeoutError, UnicodeError, ValueError) as exc:
                 # Hermes 側の bot 対策による直URL 403 は想定内。WARNING には出さず、次回通知に備えて在庫なしとして扱う。
@@ -95,8 +98,7 @@ class HermesProductCrawler:
                 normalized_url,
                 target_keywords=config.target_keywords,
             ):
-                parsed_link = urlparse(link)
-                if not is_allowed_host(parsed_link.netloc, config.allowed_hosts):
+                if not is_allowed_https_url(link, config.allowed_hosts):
                     continue
                 if link not in visited and link not in queue:
                     queue.append(link)
@@ -107,8 +109,10 @@ class HermesProductCrawler:
 
         return list(snapshots.values())
 
-    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int) -> str:
+    def _fetch_url(self, url: str, user_agent: str, timeout_seconds: int, allowed_hosts: tuple[str, ...]) -> str:
         """Hermes ページを取得し、最大読み込み量を制限して文字列化する。"""
+        if not is_allowed_https_url(url, allowed_hosts):
+            raise ValueError("URL is outside the allowed HTTPS hosts")
         request = Request(
             encode_url_for_http_request(url),
             headers={
@@ -117,7 +121,8 @@ class HermesProductCrawler:
                 "Accept-Language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
             },
         )
-        with urlopen(request, timeout=timeout_seconds) as response:
+        opener = build_opener(AllowedHTTPSRedirectHandler(allowed_hosts))
+        with opener.open(request, timeout=timeout_seconds) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             return response.read(2_500_000).decode(charset, errors="replace")
 
@@ -134,8 +139,17 @@ def encode_url_for_http_request(url: str) -> str:
 
 def is_allowed_https_url(url: str, allowed_hosts: tuple[str, ...]) -> bool:
     """クロール開始 URL が HTTPS かつ許可ホストかを判定する。"""
-    parsed = urlparse(url)
-    return parsed.scheme == "https" and is_allowed_host(parsed.netloc, allowed_hosts)
+    try:
+        parsed = urlparse(url)
+        return (
+            parsed.scheme == "https"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port in (None, 443)
+            and is_allowed_host(parsed.hostname or "", allowed_hosts)
+        )
+    except ValueError:
+        return False
 
 
 def is_allowed_host(netloc: str, allowed_hosts: tuple[str, ...]) -> bool:
@@ -148,3 +162,15 @@ def is_allowed_host(netloc: str, allowed_hosts: tuple[str, ...]) -> bool:
 def is_forbidden_http_error(exc: BaseException) -> bool:
     """Hermes が拒否した 403 応答かを判定する。"""
     return isinstance(exc, HTTPError) and exc.code == 403
+
+
+class AllowedHTTPSRedirectHandler(HTTPRedirectHandler):
+    """Reject redirects before urllib sends a request to an untrusted destination."""
+
+    def __init__(self, allowed_hosts: tuple[str, ...]) -> None:
+        self.allowed_hosts = allowed_hosts
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if not is_allowed_https_url(newurl, self.allowed_hosts):
+            raise URLError("Redirect is outside the allowed HTTPS hosts")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
